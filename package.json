@@ -1,0 +1,27 @@
+{
+  "name": "ttyhand",
+  "version": "0.0.1",
+  "description": "Let agents drive interactive terminal programs through a real PTY — over MCP or a CLI.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "spike": "tsx src/spike.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@lydell/node-pty": "^1.2.0-beta.15",
+    "@xterm/headless": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
