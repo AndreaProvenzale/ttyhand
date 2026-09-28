@@ -128,8 +128,11 @@ async function handle(conn: Conn, method: string, params: any): Promise<unknown>
   switch (method) {
     case 'hello': {
       const p = params as HelloParams;
-      if (p.version !== PROTOCOL_VERSION) {
-        throw new Error(`daemon speaks protocol ${PROTOCOL_VERSION}, client ${p.version}; run \`ttyhand stop\``);
+      if (p.version < PROTOCOL_VERSION) {
+        throw new Error(`this ttyhand client (protocol ${p.version}) is older than the daemon (${PROTOCOL_VERSION}); restart it (MCP: reconnect the server)`);
+      }
+      if (p.version > PROTOCOL_VERSION) {
+        throw new Error(`the daemon (protocol ${PROTOCOL_VERSION}) is older than this client (${p.version}); run \`ttyhand stop\``);
       }
       conn.owner = p.owner;
       return { version: PROTOCOL_VERSION, pid: process.pid };
@@ -139,7 +142,7 @@ async function handle(conn: Conn, method: string, params: any): Promise<unknown>
     case 'send': {
       const p = params as SendParams;
       const s = get(p.id);
-      return s.run(() => s.send(p.text, p.wait ?? true, timeout(p.timeout_ms)));
+      return s.run(() => s.send(p.text, p.keys ?? [], p.wait ?? true, timeout(p.timeout_ms)));
     }
     case 'read': {
       const p = params as ReadParams;

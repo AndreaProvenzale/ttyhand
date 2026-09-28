@@ -10,10 +10,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "spike": "tsx src/spike.ts",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsup --silent && tsx --test test/*.test.ts"
   },
   "license": "MIT",
   "dependencies": {
@@ -24,10 +24,12 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
+    "tsup": "^8.5.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },
   "bin": {
     "ttyhand": "dist/cli.js"
-  }
+  },
+  "packageManager": "pnpm@11.3.0"
 }

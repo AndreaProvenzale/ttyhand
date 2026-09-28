@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Client, callerEnv } from './client.js';
+import { KEY_NAMES } from './keys.js';
 import { formatResult, type ListEntry, type Result } from './protocol.js';
 
 const { version } = createRequire(import.meta.url)('../package.json');
@@ -40,10 +41,11 @@ export async function runMcp() {
   server.registerTool(
     'send',
     {
-      description: `Type text into a program and return its screen once it goes quiet. Include "\\r" to press Enter (e.g. "1+1\\r"); "\\u0003" is Ctrl+C. ${STATUS_HELP}`,
+      description: `Type into a program and return its screen once it goes quiet. text is typed literally, then keys are pressed: {"text": "1+1", "keys": ["Enter"]} runs a line, {"keys": ["Down", "Down", "Enter"]} picks from a menu, {"keys": ["Ctrl+C"]} interrupts. ${STATUS_HELP}`,
       inputSchema: {
         id,
-        text: z.string().describe('Text to type; "\\r" is Enter'),
+        text: z.string().optional().describe('Typed exactly as given; press Enter and other special keys with keys'),
+        keys: z.array(z.string()).optional().describe(`Keys pressed after text, in order: ${KEY_NAMES}`),
         wait: z.boolean().optional().describe('Wait for the program to go quiet before returning (default true)'),
         timeout_ms,
       },

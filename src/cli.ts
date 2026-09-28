@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 import { Client, callerEnv } from './client.js';
 import { runDaemon } from './daemon.js';
+import { KEY_NAMES } from './keys.js';
 import { formatList, runMcp } from './mcp.js';
 import { formatResult, type ListEntry, type Result } from './protocol.js';
 
 const USAGE = `Usage: ttyhand <command>
 
   spawn [--name N] [--cwd DIR] [--cols N] [--rows N] [--timeout MS] <cmd> [args...]
-  send <id> <text> [--no-wait] [--timeout MS]     text understands \\r \\n \\t \\e \\xNN \\uNNNN
+  send <id> [text] [--keys K1,K2] [--no-wait] [--timeout MS]
+             text is typed literally, then keys are pressed: send py-1 '1+1' --keys Enter
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
   kill <id> [--signal SIG]
   list
   mcp        run the stdio MCP server
   daemon     run the daemon in the foreground
-  stop       stop the daemon and every program it owns`;
+  stop       stop the daemon and every program it owns
+
+Keys: ${KEY_NAMES}`;
 
 type Flags = Record<string, string | true>;
 const BOOLEAN_FLAGS = new Set(['no-wait', 'help']);
@@ -58,14 +62,6 @@ function str(flags: Flags, key: string): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-const SIMPLE_ESCAPES: Record<string, string> = { r: '\r', n: '\n', t: '\t', e: '\x1b', '\\': '\\' };
-
-export function unescape(s: string): string {
-  return s.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)/gs, (all, e: string) =>
-    e.length > 1 ? String.fromCharCode(parseInt(e.slice(1), 16)) : (SIMPLE_ESCAPES[e] ?? all),
-  );
-}
-
 function need(pos: string[], count: number, usage: string) {
   if (pos.length < count) throw new Error(`usage: ttyhand ${usage}`);
 }
@@ -102,8 +98,9 @@ async function main() {
       }
       case 'send': {
         const { flags, pos } = parse(rest);
-        need(pos, 2, 'send <id> <text>');
-        print(await client.call('send', { id: pos[0], text: unescape(pos[1]), wait: !flags['no-wait'], timeout_ms: num(flags, 'timeout') }));
+        need(pos, 1, 'send <id> [text] [--keys K1,K2]');
+        const keys = str(flags, 'keys')?.split(',');
+        print(await client.call('send', { id: pos[0], text: pos[1], keys, wait: !flags['no-wait'], timeout_ms: num(flags, 'timeout') }));
         break;
       }
       case 'read': {

@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type State = 'waiting_input' | 'running' | 'exited';
 export type ReadMode = 'screen' | 'new_output' | 'scrollback';
@@ -28,7 +28,7 @@ export interface SpawnParams {
   name?: string;
   timeout_ms?: number;
 }
-export interface SendParams { id: string; text: string; wait?: boolean; timeout_ms?: number }
+export interface SendParams { id: string; text?: string; keys?: string[]; wait?: boolean; timeout_ms?: number }
 export interface ReadParams { id: string; mode?: ReadMode; since?: number }
 export interface KillParams { id: string; signal?: string }
 export interface HelloParams { version: number; owner: boolean }

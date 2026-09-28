@@ -1,9 +1,11 @@
 import pty, { type IPty } from '@lydell/node-pty';
 import xterm from '@xterm/headless';
+import { encodeKey } from './keys.js';
 import type { ReadMode, Result, State } from './protocol.js';
 
 const IDLE_MS = 400;
 const POLL_MS = 50;
+const KEY_GAP_MS = 100;
 const LOG_CAP = 1_000_000;
 const KILL_GRACE_MS = 2000;
 const SCROLLBACK = 5000;
@@ -25,6 +27,7 @@ export class Session {
   readonly pty: IPty;
   seq = 0;
   lastOutputAt = Date.now();
+  lastInputAt = 0;
   lastUsedAt = Date.now();
   exitCode?: number;
   private log = '';
@@ -58,11 +61,21 @@ export class Session {
     return next;
   }
 
-  async send(text: string, wait: boolean, timeoutMs: number): Promise<Result> {
+  /** Types `text` literally, then presses `keys`. */
+  async send(text: string | undefined, keys: string[], wait: boolean, timeoutMs: number): Promise<Result> {
     if (this.exited) throw new Error(`${this.id} has exited (code ${this.exitCode}); nothing was sent`);
-    const sentAt = Date.now();
-    this.pty.write(text);
-    const state = wait ? await this.waitIdle(timeoutMs, sentAt) : 'running';
+    if (text === undefined && !keys.length) throw new Error('nothing to send: pass text, keys or both');
+    for (const key of keys) encodeKey(key, false);
+    const deadline = Date.now() + timeoutMs;
+    if (text) this.write(text);
+    for (const [i, key] of keys.entries()) {
+      // Line-at-a-time readers (npm init, inquirer) drop input that arrives before they ask again.
+      if (text || i > 0) await this.settle(deadline);
+      if (this.exited) break;
+      await this.flush();
+      this.write(encodeKey(key, this.term.modes.applicationCursorKeysMode));
+    }
+    const state = wait ? await this.waitIdle(Math.max(deadline - Date.now(), 0), this.lastInputAt) : 'running';
     return this.snapshot('screen', undefined, state);
   }
 
@@ -78,6 +91,19 @@ export class Session {
     }
   }
 
+  private write(data: string) {
+    this.pty.write(data);
+    this.lastInputAt = Date.now();
+  }
+
+  private async settle(deadline: number) {
+    while (Date.now() - Math.max(this.lastOutputAt, this.lastInputAt) < KEY_GAP_MS && Date.now() < deadline) await sleep(10);
+  }
+
+  private flush() {
+    return new Promise<void>((resolve) => this.term.write('', resolve));
+  }
+
   async kill(signal: string): Promise<Result> {
     if (!this.exited) {
       this.pty.kill(signal);
@@ -91,7 +117,7 @@ export class Session {
   }
 
   async snapshot(mode: ReadMode, since?: number, state = this.currentState()): Promise<Result> {
-    await new Promise<void>((resolve) => this.term.write('', resolve));
+    await this.flush();
     const buf = this.term.buffer.active;
     let text: string;
     let truncated = false;

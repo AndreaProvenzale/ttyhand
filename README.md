@@ -4,7 +4,8 @@ Let an agent drive interactive terminal programs — REPLs, wizards, debuggers, 
 
 ```sh
 ttyhand spawn python3          # prints the id and the screen once it goes quiet
-ttyhand send python3-1 '1+1\r'
+ttyhand send python3-1 '1+1' --keys Enter    # text is typed literally, then keys are pressed
+ttyhand send python3-1 --keys Up,Enter        # rerun the last line
 ttyhand read python3-1 --mode new_output --since 166
 ttyhand kill python3-1
 ```
@@ -14,9 +15,9 @@ MCP (Claude Code): `claude mcp add ttyhand -- npx -y ttyhand mcp`
 ## Develop
 
 ```sh
-npm install
-npm run build
-npm test                        # drives python3, node and npm init over MCP and the CLI
+pnpm install
+pnpm build
+pnpm test                       # builds, then drives python3, node and npm init over MCP and the CLI
 ```
 
 The daemon listens on `$TTYHAND_HOME/daemon.sock` (default `$TMPDIR/ttyhand-<uid>`) and logs to `daemon.log` there. `ttyhand stop` restarts it on the next call — needed after a rebuild.
