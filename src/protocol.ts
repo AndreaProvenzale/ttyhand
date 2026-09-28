@@ -1,7 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
+export const SANDBOX_HELP = 'a sandbox may be blocking it; see "Sandboxes" in the ttyhand README';
 
 export type State = 'waiting_input' | 'running' | 'exited';
 export type ReadMode = 'screen' | 'new_output' | 'scrollback';
@@ -35,12 +36,17 @@ export interface ReadParams { id: string; mode?: ReadMode; since?: number }
 export interface WaitParams { id: string; until?: 'input' | 'exit'; pattern?: string; timeout_ms?: number }
 export interface ResizeParams { id: string; cols: number; rows: number; timeout_ms?: number }
 export interface KillParams { id: string; signal?: string }
+export interface AttachParams { id: string }
+/** Reply to attach; then the daemon streams `{id, event}` lines under the same request id. */
+export interface AttachResult { cols: number; rows: number; picture: string; exitCode?: number }
+/** `lost` is set by the client, not the daemon: the connection dropped. */
+export interface AttachEvent { data?: string; exit?: number; lost?: true }
 export interface HelloParams { version: number; owner: boolean }
 
 export interface ListEntry { id: string; cmd: string; state: State; exitCode?: number }
 
 export interface Request { id: number; method: string; params?: unknown }
-export interface Response { id: number; result?: unknown; error?: { message: string } }
+export interface Response { id: number; result?: unknown; error?: { message: string }; event?: AttachEvent }
 
 export function homeDir(): string {
   if (process.env.TTYHAND_HOME) return process.env.TTYHAND_HOME;

@@ -3,7 +3,10 @@ import net from 'node:net';
 import path from 'node:path';
 import {
   PROTOCOL_VERSION,
+  SANDBOX_HELP,
   homeDir,
+  type AttachParams,
+  type AttachResult,
   lockPath,
   socketPath,
   type HelloParams,
@@ -46,6 +49,14 @@ export async function runDaemon() {
   }
   fs.rmSync(socketPath(), { force: true });
   server = net.createServer(onConnection);
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    // macOS allows 104 bytes including the terminator, Linux 108.
+    const tooLong = Buffer.byteLength(socketPath()) > 103;
+    const hint = tooLong ? 'the path is too long for a Unix socket; set TTYHAND_HOME to a shorter directory' : err.code === 'EPERM' ? SANDBOX_HELP : '';
+    log(`could not listen on ${socketPath()}: ${err.message}${hint && `; ${hint}`}`);
+    fs.rmSync(lockPath(), { force: true });
+    process.exit(1);
+  });
   server.listen(socketPath(), () => {
     fs.chmodSync(socketPath(), 0o600);
     log(`listening on ${socketPath()} (pid ${process.pid})`);
@@ -120,14 +131,14 @@ async function respond(conn: Conn, line: string) {
   }
   const res: Response = { id: req.id };
   try {
-    res.result = await handle(conn, req.method, req.params ?? {});
+    res.result = await handle(conn, req.method, req.params ?? {}, req.id);
   } catch (err) {
     res.error = { message: (err as Error).message };
   }
   if (!conn.socket.destroyed) conn.socket.write(JSON.stringify(res) + '\n');
 }
 
-async function handle(conn: Conn, method: string, params: any): Promise<unknown> {
+async function handle(conn: Conn, method: string, params: any, reqId: number): Promise<unknown> {
   switch (method) {
     case 'hello': {
       const p = params as HelloParams;
@@ -174,6 +185,17 @@ async function handle(conn: Conn, method: string, params: any): Promise<unknown>
       log(`killed ${s.id} (code ${s.exitCode})`);
       return result;
     }
+    case 'attach': {
+      const s = get((params as AttachParams).id);
+      const picture = await s.picture();
+      if (s.exited) return { cols: s.term.cols, rows: s.term.rows, picture, exitCode: s.exitCode } satisfies AttachResult;
+      // Registered before the reply goes out; events are written from later ticks, so the picture arrives first.
+      const unwatch = s.watch((event) => {
+        if (!conn.socket.destroyed) conn.socket.write(JSON.stringify({ id: reqId, event }) + '\n');
+      });
+      conn.socket.once('close', unwatch);
+      return { cols: s.term.cols, rows: s.term.rows, picture } satisfies AttachResult;
+    }
     case 'list':
       return [...sessions.values()]
         .filter((s) => !conn.owner || s.owner === conn)
@@ -198,7 +220,13 @@ async function spawn(conn: Conn, p: SpawnParams) {
   const cwd = p.cwd ?? process.cwd();
   if (!findExecutable(p.cmd, env.PATH ?? '', cwd)) throw new Error(`command not found: ${p.cmd}`);
   const id = newId(p.cmd, p.name);
-  const session = new Session(id, { cmd: p.cmd, args: p.args ?? [], cwd, env, cols, rows }, conn.owner ? conn : undefined);
+  let session: Session;
+  try {
+    session = new Session(id, { cmd: p.cmd, args: p.args ?? [], cwd, env, cols, rows }, conn.owner ? conn : undefined);
+  } catch (err) {
+    const msg = (err as Error).message;
+    throw new Error(`could not open a terminal for ${p.cmd}: ${msg}${/not permitted/i.test(msg) ? `; ${SANDBOX_HELP}` : ''}`);
+  }
   sessions.set(id, session);
   log(`spawned ${id}: ${[p.cmd, ...(p.args ?? [])].join(' ')}`);
   return session.run(async () => session.snapshot('screen', undefined, await session.waitIdle(timeout(p.timeout_ms))));

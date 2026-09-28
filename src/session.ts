@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import pty, { type IPty } from '@lydell/node-pty';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import xterm from '@xterm/headless';
 import { encodeKey } from './keys.js';
-import type { ReadMode, Result, State } from './protocol.js';
+import type { AttachEvent, ReadMode, Result, State } from './protocol.js';
 
 const IDLE_MS = 400;
 // Quiet with the cursor on an empty line is as often a pause mid-work (loading, sleeping) as a prompt.
@@ -36,9 +37,13 @@ export class Session {
   private log = '';
   private logStart = 0;
   private queue: Promise<unknown> = Promise.resolve();
+  private serializer = new SerializeAddon();
+  private watchers = new Set<(event: AttachEvent) => void>();
 
   constructor(readonly id: string, readonly opts: SessionOptions, readonly owner?: object) {
     this.term = new xterm.Terminal({ cols: opts.cols, rows: opts.rows, scrollback: SCROLLBACK, allowProposedApi: true });
+    // The addon's typings name @xterm/xterm's Terminal; the headless one has the same API.
+    this.term.loadAddon(this.serializer as unknown as xterm.ITerminalAddon);
     this.pty = pty.spawn(opts.cmd, opts.args, {
       name: 'xterm-256color',
       cols: opts.cols,
@@ -47,8 +52,11 @@ export class Session {
       env: opts.env,
     });
     this.pty.onData((data) => this.onOutput(data));
+    // Replies to terminal queries (cursor position, device attributes); fzf stalls until it gets one.
+    this.term.onData((data) => this.pty.write(data));
     this.pty.onExit(({ exitCode, signal }) => {
       this.exitCode = signal ? 128 + signal : exitCode;
+      for (const watch of this.watchers) watch({ exit: this.exitCode });
     });
   }
 
@@ -116,6 +124,18 @@ export class Session {
     return this.snapshot('screen', undefined, await this.waitIdle(timeoutMs));
   }
 
+  /** The screen as escape sequences that redraw it, modes included, for a human's terminal. */
+  async picture(): Promise<string> {
+    await this.flush();
+    return this.serializer.serialize({ scrollback: 0 });
+  }
+
+  /** Streams raw output, then the exit code, to `fn` until the returned function is called. */
+  watch(fn: (event: AttachEvent) => void): () => void {
+    this.watchers.add(fn);
+    return () => this.watchers.delete(fn);
+  }
+
   private write(data: string) {
     this.pty.write(data);
     this.lastInputAt = Date.now();
@@ -153,9 +173,7 @@ export class Session {
     } else {
       const first = mode === 'screen' ? buf.viewportY : 0;
       const last = mode === 'screen' ? buf.viewportY + this.term.rows : buf.length;
-      const lines: string[] = [];
-      for (let y = first; y < last; y++) lines.push(buf.getLine(y)?.translateToString(true) ?? '');
-      text = dropTrailingBlanks(lines).join('\n');
+      text = dropTrailingBlanks(renderLines(buf, first, last)).join('\n');
     }
     return {
       id: this.id,
@@ -188,6 +206,7 @@ export class Session {
   private onOutput(data: string) {
     this.lastOutputAt = Date.now();
     this.term.write(data);
+    for (const watch of this.watchers) watch({ data });
     this.seq += data.length;
     this.log += data;
     if (this.log.length > LOG_CAP) {
@@ -257,6 +276,56 @@ function readProc(file: string): string {
   } catch {
     return '';
   }
+}
+
+/** Reverse video or a background, as a key; '' for plain cells. */
+function highlightStyle(cell: xterm.IBufferCell): string {
+  if (cell.isInverse()) return 'inverse';
+  return cell.isBgDefault() ? '' : `${cell.getBgColorMode()}:${cell.getBgColor()}`;
+}
+
+/**
+ * Buffer lines as right-trimmed text, with highlighted runs wrapped in «»: reverse video or a background, unless it
+ * is the style most of the text is in (a dialog's box). That is how menus, pickers and lists show the selection.
+ */
+function renderLines(buf: xterm.IBuffer, first: number, last: number): string[] {
+  const cell = buf.getNullCell();
+  const rows: { chars: string[]; styles: string[] }[] = [];
+  const textCells = new Map<string, number>();
+  for (let y = first; y < last; y++) {
+    const line = buf.getLine(y);
+    const row = { chars: [] as string[], styles: [] as string[] };
+    for (let x = 0; line && x < line.length; x++) {
+      line.getCell(x, cell);
+      if (cell.getWidth() === 0) continue;
+      const style = highlightStyle(cell);
+      const chars = cell.getChars() || ' ';
+      row.chars.push(chars);
+      row.styles.push(style);
+      // Only text counts: a backdrop of blank cells often shares its colour with the selection.
+      if (chars !== ' ') textCells.set(style, (textCells.get(style) ?? 0) + 1);
+    }
+    rows.push(row);
+  }
+  const base = [...textCells].reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0])[0];
+  const marked = (style: string) => style !== '' && style !== base;
+  return rows.map(({ chars, styles }) => {
+    let out = '';
+    for (let x = 0; x < chars.length; ) {
+      if (!marked(styles[x])) {
+        out += chars[x++];
+        continue;
+      }
+      let end = x;
+      while (end < chars.length && marked(styles[end])) end++;
+      const run = chars.slice(x, end).join('');
+      const text = run.trim();
+      out += text ? run.replace(text, `«${text}»`) : run;
+      x = end;
+    }
+    // Full-screen programs clear lines by writing spaces.
+    return out.trimEnd();
+  });
 }
 
 function dropTrailingBlanks(lines: string[]): string[] {

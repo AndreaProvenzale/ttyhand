@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
-import { PROTOCOL_VERSION, homeDir, logPath, socketPath, type Response } from './protocol.js';
+import { PROTOCOL_VERSION, SANDBOX_HELP, homeDir, logPath, socketPath, type AttachEvent, type Response } from './protocol.js';
 
 const START_TIMEOUT_MS = 5000;
 
@@ -11,16 +11,18 @@ export class Client {
   private connecting?: Promise<void>;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private streams = new Map<number, (event: AttachEvent) => void>();
 
   /** `owner` connections own what they spawn: the daemon kills it when they disconnect. */
   constructor(private owner: boolean) {}
 
-  async call<T>(method: string, params?: unknown): Promise<T> {
+  /** `onEvent` receives what the daemon streams after the reply (attach). */
+  async call<T>(method: string, params?: unknown, onEvent?: (event: AttachEvent) => void): Promise<T> {
     if (!this.socket || this.socket.destroyed) {
       this.connecting ??= this.connect().finally(() => (this.connecting = undefined));
       await this.connecting;
     }
-    return this.request<T>(method, params);
+    return this.request<T>(method, params, onEvent);
   }
 
   close() {
@@ -38,6 +40,10 @@ export class Client {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const res: Response = JSON.parse(buf.slice(0, nl));
         buf = buf.slice(nl + 1);
+        if (res.event) {
+          this.streams.get(res.id)?.(res.event);
+          continue;
+        }
         const p = this.pending.get(res.id);
         this.pending.delete(res.id);
         if (res.error) p?.reject(new Error(res.error.message));
@@ -48,6 +54,8 @@ export class Client {
     socket.on('close', () => {
       for (const p of this.pending.values()) p.reject(new Error('lost connection to the ttyhand daemon'));
       this.pending.clear();
+      for (const onEvent of this.streams.values()) onEvent({ lost: true });
+      this.streams.clear();
     });
     try {
       await this.request('hello', { version: PROTOCOL_VERSION, owner: this.owner });
@@ -58,8 +66,9 @@ export class Client {
     }
   }
 
-  private request<T>(method: string, params?: unknown): Promise<T> {
+  private request<T>(method: string, params?: unknown, onEvent?: (event: AttachEvent) => void): Promise<T> {
     const id = this.nextId++;
+    if (onEvent) this.streams.set(id, onEvent);
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.socket!.write(JSON.stringify({ id, method, params }) + '\n');
@@ -97,19 +106,34 @@ async function connectOrStart(): Promise<net.Socket> {
   try {
     return await connectOnce();
   } catch {}
-  startDaemon();
+  const daemon = startDaemon();
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
     try {
       return await connectOnce();
     } catch {}
+    // A daemon that lost the start race to another exits with 0; keep waiting for the winner.
+    if (daemon.exitCode) break;
   }
-  throw new Error(`could not start the ttyhand daemon; see ${logPath()}`);
+  throw new Error(`could not start the ttyhand daemon: ${lastLogLine()} (log: ${logPath()})`);
 }
 
-function startDaemon() {
-  fs.mkdirSync(homeDir(), { recursive: true, mode: 0o700 });
+function lastLogLine(): string {
+  try {
+    const lines = fs.readFileSync(logPath(), 'utf8').trim().split('\n');
+    return lines[lines.length - 1].replace(/^\S+Z /, '');
+  } catch {
+    return 'it wrote no log';
+  }
+}
+
+function startDaemon(): ChildProcess {
+  try {
+    fs.mkdirSync(homeDir(), { recursive: true, mode: 0o700 });
+  } catch (err) {
+    throw new Error(`could not create ${homeDir()}: ${(err as Error).message}; ${SANDBOX_HELP}, or set TTYHAND_HOME to a writable directory`);
+  }
   const out = fs.openSync(logPath(), 'a', 0o600);
   const child = spawn(process.execPath, [...process.execArgv, process.argv[1], 'daemon'], {
     detached: true,
@@ -117,4 +141,5 @@ function startDaemon() {
   });
   child.unref();
   fs.closeSync(out);
+  return child;
 }

@@ -3,7 +3,7 @@ import { Client, callerEnv, stopDaemon } from './client.js';
 import { runDaemon } from './daemon.js';
 import { KEY_NAMES } from './keys.js';
 import { formatList, runMcp } from './mcp.js';
-import { formatResult, type ListEntry, type Result } from './protocol.js';
+import { formatResult, type AttachEvent, type AttachResult, type ListEntry, type Result } from './protocol.js';
 
 const USAGE = `Usage: ttyhand <command>
 
@@ -16,11 +16,13 @@ const USAGE = `Usage: ttyhand <command>
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
   kill <id> [--signal SIG]
   list
+  attach <id>  watch a program live, read-only; Ctrl+C detaches
   mcp        run the stdio MCP server
   daemon     run the daemon in the foreground
   stop       stop the daemon and every program it owns
 
-Keys: ${KEY_NAMES}`;
+Keys: ${KEY_NAMES}
+On screen, highlighted text (the selection in menus and lists) is wrapped in «».`;
 
 type Flags = Record<string, string | true>;
 const BOOLEAN_FLAGS = new Set(['no-wait', 'help']);
@@ -67,6 +69,38 @@ function str(flags: Flags, key: string): string | undefined {
 
 function need(pos: string[], count: number, usage: string) {
   if (pos.length < count) throw new Error(`usage: ttyhand ${usage}`);
+}
+
+// Undoes modes a program may have set on the viewer's terminal: attributes, hidden cursor, app cursor, mouse, paste.
+const RESET_VIEW = '\x1b[0m\x1b[?25h\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l';
+const ALT_SCREEN = /\x1b\[\?(?:1049|1047|47)([hl])/g;
+
+/** Mirrors a program's output to this terminal until it exits or Ctrl+C; keys typed here are not sent. */
+async function attach(client: Client, id: string) {
+  const out = process.stdout;
+  let altScreen = false;
+  // Leaving the alternate screen when not on it would restore a stale cursor and print over the output.
+  const show = (data: string) => {
+    for (const [, mode] of data.matchAll(ALT_SCREEN)) altScreen = mode === 'h';
+    out.write(data);
+  };
+  let end!: (event: AttachEvent) => void;
+  const ended = new Promise<AttachEvent>((resolve) => (end = resolve));
+  const view = await client.call<AttachResult>('attach', { id }, (event) => (event.data ? show(event.data) : end(event)));
+  const size = out.columns === view.cols && out.rows === view.rows ? '' : ` (it is ${view.cols}x${view.rows}, this terminal ${out.columns}x${out.rows})`;
+  out.write(`attached to ${id}${size}, read-only; Ctrl+C detaches\r\n`);
+  show(view.picture);
+  if (view.exitCode !== undefined) end({ exit: view.exitCode });
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.on('data', (key: Buffer) => {
+      if (key.includes(3) || key.includes(4)) end({});
+    });
+  }
+  process.once('SIGINT', () => end({}));
+  const event = await ended;
+  out.write(`${RESET_VIEW}${altScreen ? '\x1b[?1049l' : '\r\n'}${event.exit !== undefined ? `${id} exited code=${event.exit}` : event.lost ? 'lost the ttyhand daemon' : 'detached'}\n`);
+  process.stdin.destroy();
 }
 
 async function main() {
@@ -128,6 +162,12 @@ async function main() {
         const { flags, pos } = parse(rest);
         need(pos, 1, 'kill <id>');
         print(await client.call('kill', { id: pos[0], signal: str(flags, 'signal') }));
+        break;
+      }
+      case 'attach': {
+        const { pos } = parse(rest);
+        need(pos, 1, 'attach <id>');
+        await attach(client, pos[0]);
         break;
       }
       case 'list':

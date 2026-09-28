@@ -9,7 +9,7 @@ import { formatResult, type ListEntry, type Result } from './protocol.js';
 const { version } = createRequire(import.meta.url)('../package.json');
 
 const STATUS_HELP =
-  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code.';
+  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code. Highlighted text, such as the selected item in a menu or list, is wrapped in «».';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const screen = (r: Result) => text(formatResult(r));
@@ -83,7 +83,7 @@ export async function runMcp() {
     'read',
     {
       description:
-        'Return the current screen without typing anything. mode=new_output returns plain text printed since an earlier result (pass its seq as since); mode=scrollback returns the whole history.',
+        'Return the current screen without typing anything; highlighted text is wrapped in «». mode=new_output returns plain text printed since an earlier result (pass its seq as since); mode=scrollback returns the whole history.',
       inputSchema: {
         id,
         mode: z.enum(['screen', 'new_output', 'scrollback']).optional().describe('Default screen'),

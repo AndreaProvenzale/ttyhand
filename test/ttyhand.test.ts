@@ -32,6 +32,7 @@ async function mcpClient() {
 }
 
 const idOf = (screen: string) => screen.match(/^\[(\S+)/)![1];
+const which = (cmd: string) => (process.env.PATH ?? '').split(path.delimiter).some((d) => fs.existsSync(path.join(d, cmd)));
 
 before(() => assert.ok(fs.existsSync(CLI), 'run `pnpm build` first'));
 after(async () => {
@@ -131,6 +132,34 @@ describe('over MCP', () => {
     await client.close();
   });
 
+  test('terminal queries get answered', async () => {
+    const { client, call } = await mcpClient();
+    const script = 'process.stdin.setRawMode(true); process.stdout.write("\\x1b[6n"); process.stdin.once("data", (d) => { console.log("reply", d.toString().slice(1)); process.exit(0) })';
+    assert.match(await call('spawn', { cmd: 'node', args: ['-e', script] }), /reply \[\d+;\d+R/);
+    await client.close();
+  });
+
+  test('highlights are marked, except the style most text is in', async () => {
+    const { client, call } = await mcpClient();
+    const script = 'process.stdout.write("one \\x1b[7mtwo\\x1b[0m three\\n\\x1b[47m box text here \\x1b[44mpick\\x1b[47m more box \\x1b[0m\\n"); process.stdin.resume()';
+    assert.match(await call('spawn', { cmd: 'node', args: ['-e', script] }), /\]\none «two» three\n box text here «pick» more box$/);
+    await client.close();
+  });
+
+  test('vim edit and :wq', { skip: !which('vim') && 'vim not installed' }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tth-vim-'));
+    const file = path.join(dir, 'notes.txt');
+    const { client, call } = await mcpClient();
+    const id = idOf(await call('spawn', { cmd: 'vim', args: ['-u', 'NONE', file] }));
+    const screen = await call('send', { id, text: 'ihello\nworld', keys: ['Esc'] });
+    assert.match(screen, /\]\nhello\nworld\n~\n/);
+    assert.doesNotMatch(screen, / $/m);
+    assert.match(await call('send', { id, text: ':wq', keys: ['Enter'] }), /exited code=0/);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'hello\nworld\n');
+    await client.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   test('resize reaches the program', async () => {
     const { client, call } = await mcpClient();
     const id = idOf(await call('spawn', { cmd: 'python3' }));
@@ -162,6 +191,16 @@ describe('over the CLI', () => {
     await cli('send', id, 'print("b")', '--keys', 'Enter');
     assert.equal((await cli('read', id, '--mode', 'new_output', '--since', seq)).split('\n').slice(1, 3).join('\n'), 'print("b")\nb');
     assert.match(await cli('kill', id), /exited/);
+  });
+
+  test('attach mirrors a program live until Ctrl+C', async () => {
+    const id = idOf(await cli('spawn', 'python3'));
+    await cli('send', id, 'x = 41', '--keys', 'Enter');
+    const viewer = idOf(await cli('spawn', process.execPath, CLI, 'attach', id));
+    await cli('send', id, 'x + 1', '--keys', 'Enter');
+    assert.match(await cli('wait', viewer, '--pattern', '^42$', '--timeout', '5000'), / matched\]\nattached to [^\n]*\n[^]*>>> x = 41\n>>> x \+ 1\n42\n>>>/);
+    assert.match(await cli('send', viewer, '--keys', 'Ctrl+C'), /exited code=0[^]*\ndetached\n$/);
+    await cli('kill', id);
   });
 
   test('spawn passes flags after the command through', async () => {
