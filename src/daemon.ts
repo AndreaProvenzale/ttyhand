@@ -11,15 +11,18 @@ import {
   type ListEntry,
   type ReadParams,
   type Request,
+  type ResizeParams,
   type Response,
   type SendParams,
   type SpawnParams,
+  type WaitParams,
 } from './protocol.js';
 import { Session } from './session.js';
 
 const MAX_SESSIONS = 32;
 const REAP_MS = 30 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
 
 const TERMINAL_ENV = { TERM: 'xterm-256color', NO_COLOR: '1', PAGER: 'cat', GIT_PAGER: 'cat' };
@@ -144,6 +147,19 @@ async function handle(conn: Conn, method: string, params: any): Promise<unknown>
       const s = get(p.id);
       return s.run(() => s.send(p.text, p.keys ?? [], p.wait ?? true, timeout(p.timeout_ms)));
     }
+    case 'wait': {
+      const p = params as WaitParams;
+      const s = get(p.id);
+      if (p.until && p.until !== 'input' && p.until !== 'exit') throw new Error('until must be input or exit');
+      const pattern = p.pattern === undefined ? undefined : regex(p.pattern);
+      return s.run(() => s.wait(p.until ?? 'input', pattern, timeout(p.timeout_ms ?? DEFAULT_WAIT_TIMEOUT_MS)));
+    }
+    case 'resize': {
+      const p = params as ResizeParams;
+      const s = get(p.id);
+      checkSize(p.cols, p.rows);
+      return s.run(() => s.resize(p.cols, p.rows, timeout(p.timeout_ms)));
+    }
     case 'read': {
       const p = params as ReadParams;
       const s = get(p.id);
@@ -175,7 +191,10 @@ async function spawn(conn: Conn, p: SpawnParams) {
   if (sessions.size >= MAX_SESSIONS) throw new Error(`too many programs (max ${MAX_SESSIONS}); kill one first`);
   const cols = p.cols ?? 100;
   const rows = p.rows ?? 30;
-  const env: Record<string, string> = { ...(p.inherit_env ?? (process.env as Record<string, string>)), ...TERMINAL_ENV, COLUMNS: String(cols), LINES: String(rows), ...p.env };
+  checkSize(cols, rows);
+  // The PTY carries the size; an inherited COLUMNS/LINES would override it after a resize.
+  const { COLUMNS, LINES, ...inherited } = p.inherit_env ?? (process.env as Record<string, string>);
+  const env: Record<string, string> = { ...inherited, ...TERMINAL_ENV, ...p.env };
   const cwd = p.cwd ?? process.cwd();
   if (!findExecutable(p.cmd, env.PATH ?? '', cwd)) throw new Error(`command not found: ${p.cmd}`);
   const id = newId(p.cmd, p.name);
@@ -215,6 +234,20 @@ function get(id: string): Session {
   const s = sessions.get(id);
   if (!s) throw new Error(`no program with id "${id}"; call list to see what is running`);
   return s;
+}
+
+function checkSize(cols: number, rows: number) {
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 500 || rows < 5 || rows > 200) {
+    throw new Error('cols must be 20-500 and rows 5-200');
+  }
+}
+
+function regex(pattern: string): RegExp {
+  try {
+    return new RegExp(pattern, 'm');
+  } catch (err) {
+    throw new Error(`invalid pattern: ${(err as Error).message}`);
+  }
 }
 
 const timeout = (ms?: number) => Math.min(Math.max(ms ?? DEFAULT_TIMEOUT_MS, 0), MAX_TIMEOUT_MS);

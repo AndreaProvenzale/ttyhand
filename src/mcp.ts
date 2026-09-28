@@ -9,7 +9,7 @@ import { formatResult, type ListEntry, type Result } from './protocol.js';
 const { version } = createRequire(import.meta.url)('../package.json');
 
 const STATUS_HELP =
-  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call read later), or exited with its code.';
+  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code.';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const screen = (r: Result) => text(formatResult(r));
@@ -19,6 +19,8 @@ export async function runMcp() {
   const server = new McpServer({ name: 'ttyhand', version });
   const id = z.string().describe('Program id returned by spawn');
   const timeout_ms = z.number().int().min(0).optional().describe('Max time to wait for the program to go quiet (default 10000)');
+  const cols = z.number().int().min(20).max(500);
+  const rows = z.number().int().min(5).max(200);
 
   server.registerTool(
     'spawn',
@@ -29,8 +31,8 @@ export async function runMcp() {
         args: z.array(z.string()).optional().describe('Arguments, one per item'),
         cwd: z.string().optional().describe("Working directory (default: the server's)"),
         env: z.record(z.string(), z.string()).optional().describe('Extra environment variables'),
-        cols: z.number().int().min(20).max(500).optional().describe('Terminal width (default 100)'),
-        rows: z.number().int().min(5).max(200).optional().describe('Terminal height (default 30)'),
+        cols: cols.optional().describe('Terminal width (default 100)'),
+        rows: rows.optional().describe('Terminal height (default 30)'),
         name: z.string().optional().describe('Readable id to use instead of the generated one'),
         timeout_ms,
       },
@@ -51,6 +53,30 @@ export async function runMcp() {
       },
     },
     async (p) => screen(await client.call('send', p)),
+  );
+
+  server.registerTool(
+    'wait',
+    {
+      description: `Wait without typing, then return the screen: for when a result said running (an install, a build, a slow start). Returns once the program wants input again, or with until=exit once it exits. pattern returns as soon as the screen matches it instead, and the status line says matched or no_match. ${STATUS_HELP}`,
+      inputSchema: {
+        id,
+        until: z.enum(['input', 'exit']).optional().describe('Default input'),
+        pattern: z.string().optional().describe('JavaScript regex tested against the screen, ^ and $ per line, e.g. "Listening on|Error"'),
+        timeout_ms: z.number().int().min(0).optional().describe('Max time to wait (default 30000)'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (p) => screen(await client.call('wait', p)),
+  );
+
+  server.registerTool(
+    'resize',
+    {
+      description: `Resize the terminal and return the screen after the program redraws. Use it when a full-screen program wraps or cuts off lines; line-based programs do not re-wrap what they already printed. ${STATUS_HELP}`,
+      inputSchema: { id, cols: cols.describe('Terminal width'), rows: rows.describe('Terminal height'), timeout_ms },
+    },
+    async (p) => screen(await client.call('resize', p)),
   );
 
   server.registerTool(

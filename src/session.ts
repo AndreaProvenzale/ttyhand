@@ -1,9 +1,12 @@
+import fs from 'node:fs';
 import pty, { type IPty } from '@lydell/node-pty';
 import xterm from '@xterm/headless';
 import { encodeKey } from './keys.js';
 import type { ReadMode, Result, State } from './protocol.js';
 
 const IDLE_MS = 400;
+// Quiet with the cursor on an empty line is as often a pause mid-work (loading, sleeping) as a prompt.
+const BARE_LINE_IDLE_MS = 2000;
 const POLL_MS = 50;
 const KEY_GAP_MS = 100;
 const LOG_CAP = 1_000_000;
@@ -79,16 +82,38 @@ export class Session {
     return this.snapshot('screen', undefined, state);
   }
 
-  async waitIdle(timeoutMs: number, since = Date.now()): Promise<State> {
-    const start = Date.now();
+  /** Polls until the program is waiting for input or has exited; `since` ignores quiet from before that time. */
+  async waitIdle(timeoutMs: number, since = this.lastInputAt): Promise<State> {
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const now = Date.now();
-      // Output can trail the exit event; give it a moment to land.
-      if (this.exited && now - this.lastOutputAt >= POLL_MS) return 'exited';
-      if (now - Math.max(this.lastOutputAt, since) >= IDLE_MS) return 'waiting_input';
-      if (now - start >= timeoutMs) return 'running';
+      const state = this.currentState(since);
+      if (state !== 'running' || Date.now() >= deadline) return state;
       await sleep(POLL_MS);
     }
+  }
+
+  /** Waits until the program asks for input (or exits), or with `pattern`, until the screen matches it. */
+  async wait(until: 'input' | 'exit', pattern: RegExp | undefined, timeoutMs: number): Promise<Result> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = this.currentState(this.lastInputAt);
+      const screen = await this.snapshot('screen', undefined, state);
+      if (pattern) {
+        if (pattern.test(screen.text)) return { ...screen, matched: true };
+        if (state === 'exited' || Date.now() >= deadline) return { ...screen, matched: false };
+      } else if (state === 'exited' || (until === 'input' && state === 'waiting_input') || Date.now() >= deadline) {
+        return screen;
+      }
+      await sleep(POLL_MS);
+    }
+  }
+
+  async resize(cols: number, rows: number, timeoutMs: number): Promise<Result> {
+    if (this.exited) throw new Error(`${this.id} has exited (code ${this.exitCode})`);
+    this.term.resize(cols, rows);
+    this.pty.resize(cols, rows);
+    this.lastInputAt = Date.now();
+    return this.snapshot('screen', undefined, await this.waitIdle(timeoutMs));
   }
 
   private write(data: string) {
@@ -143,9 +168,21 @@ export class Session {
     };
   }
 
-  private currentState(): State {
-    if (this.exited) return 'exited';
-    return Date.now() - this.lastOutputAt >= IDLE_MS ? 'waiting_input' : 'running';
+  private currentState(since = 0): State {
+    const now = Date.now();
+    // Output can trail the exit event; give it a moment to land.
+    if (this.exited) return now - this.lastOutputAt >= POLL_MS ? 'exited' : 'running';
+    const quiet = now - Math.max(this.lastOutputAt, since);
+    if (quiet < IDLE_MS) return 'running';
+    const tty = ttyActivity(this.pty.pid);
+    if (tty) return tty === 'reading' ? 'waiting_input' : 'running';
+    return quiet >= BARE_LINE_IDLE_MS || this.cursorAfterText() ? 'waiting_input' : 'running';
+  }
+
+  /** Prompts leave the cursor after some text; full-screen programs put it anywhere. */
+  private cursorAfterText() {
+    const buf = this.term.buffer.active;
+    return buf.type === 'alternate' || buf.cursorX > 0 || !!buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true);
   }
 
   private onOutput(data: string) {
@@ -163,6 +200,62 @@ export class Session {
   private async waitExit(timeoutMs: number) {
     const deadline = Date.now() + timeoutMs;
     while (!this.exited && Date.now() < deadline) await sleep(POLL_MS);
+  }
+}
+
+const TTY_READ = new Set(['n_tty_read', 'wait_woken']);
+const SLEEPING = new Set(['hrtimer_nanosleep', 'do_nanosleep']);
+
+/**
+ * Linux only: whether the terminal's foreground process group is blocked reading the terminal ("reading"),
+ * running or sleeping ("busy"), or neither for sure (undefined: polling, e.g. readline, libuv or curses).
+ */
+export function ttyActivity(pid: number): 'reading' | 'busy' | undefined {
+  if (process.platform !== 'linux') return undefined;
+  try {
+    const tpgid = statFields(pid)?.[5];
+    if (!tpgid) return undefined;
+    let busy = false;
+    for (const p of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(p)) continue;
+      const stat = statFields(Number(p));
+      if (stat?.[2] !== tpgid) continue;
+      for (const tid of fs.readdirSync(`/proc/${p}/task`)) {
+        const read = blockedRead(`/proc/${p}`, `/proc/${p}/task/${tid}`);
+        if (read === 'terminal') return 'reading';
+        // Background threads often block on sockets; only the main thread's says the program is busy.
+        busy ||= read === 'other' && tid === p;
+      }
+      busy ||= stat[0] === 'R' || stat[0] === 'D' || SLEEPING.has(readProc(`/proc/${p}/wchan`));
+    }
+    return busy ? 'busy' : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What a thread blocked in wait_woken reads (sockets block there too), judged by the syscall's first argument. */
+function blockedRead(proc: string, task: string): 'terminal' | 'other' | undefined {
+  if (!TTY_READ.has(readProc(`${task}/wchan`))) return undefined;
+  const fd = Number(readProc(`${task}/syscall`).split(' ')[1]);
+  try {
+    return /^\/dev\/(pts\/|tty)/.test(fs.readlinkSync(`${proc}/fd/${fd}`)) ? 'terminal' : 'other';
+  } catch {
+    return undefined;
+  }
+}
+
+/** Fields of /proc/<pid>/stat after the command name: state, ppid, pgrp, session, tty_nr, tpgid, ... */
+function statFields(pid: number): string[] | undefined {
+  const stat = readProc(`/proc/${pid}/stat`);
+  return stat ? stat.slice(stat.lastIndexOf(')') + 2).split(' ') : undefined;
+}
+
+function readProc(file: string): string {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
   }
 }
 

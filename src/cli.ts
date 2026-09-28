@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Client, callerEnv } from './client.js';
+import { Client, callerEnv, stopDaemon } from './client.js';
 import { runDaemon } from './daemon.js';
 import { KEY_NAMES } from './keys.js';
 import { formatList, runMcp } from './mcp.js';
@@ -10,6 +10,9 @@ const USAGE = `Usage: ttyhand <command>
   spawn [--name N] [--cwd DIR] [--cols N] [--rows N] [--timeout MS] <cmd> [args...]
   send <id> [text] [--keys K1,K2] [--no-wait] [--timeout MS]
              text is typed literally, then keys are pressed: send py-1 '1+1' --keys Enter
+  wait <id> [--until input|exit] [--pattern REGEX] [--timeout MS]
+             after a running result; --pattern returns once the screen matches
+  resize <id> <cols> <rows> [--timeout MS]
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
   kill <id> [--signal SIG]
   list
@@ -103,6 +106,18 @@ async function main() {
         print(await client.call('send', { id: pos[0], text: pos[1], keys, wait: !flags['no-wait'], timeout_ms: num(flags, 'timeout') }));
         break;
       }
+      case 'wait': {
+        const { flags, pos } = parse(rest);
+        need(pos, 1, 'wait <id> [--until input|exit] [--pattern REGEX]');
+        print(await client.call('wait', { id: pos[0], until: str(flags, 'until'), pattern: str(flags, 'pattern'), timeout_ms: num(flags, 'timeout') }));
+        break;
+      }
+      case 'resize': {
+        const { flags, pos } = parse(rest);
+        need(pos, 3, 'resize <id> <cols> <rows>');
+        print(await client.call('resize', { id: pos[0], cols: Number(pos[1]), rows: Number(pos[2]), timeout_ms: num(flags, 'timeout') }));
+        break;
+      }
       case 'read': {
         const { flags, pos } = parse(rest);
         need(pos, 1, 'read <id>');
@@ -119,7 +134,7 @@ async function main() {
         console.log(formatList(await client.call<ListEntry[]>('list')));
         break;
       case 'stop':
-        await client.call('stop');
+        if (!(await stopDaemon())) console.log('no daemon running');
         break;
       default:
         throw new Error(`unknown command "${verb}"\n\n${USAGE}`);

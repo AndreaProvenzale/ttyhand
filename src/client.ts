@@ -49,7 +49,13 @@ export class Client {
       for (const p of this.pending.values()) p.reject(new Error('lost connection to the ttyhand daemon'));
       this.pending.clear();
     });
-    await this.request('hello', { version: PROTOCOL_VERSION, owner: this.owner });
+    try {
+      await this.request('hello', { version: PROTOCOL_VERSION, owner: this.owner });
+    } catch (err) {
+      // Otherwise the next call would reuse the socket and skip the version check.
+      socket.destroy();
+      throw err;
+    }
   }
 
   private request<T>(method: string, params?: unknown): Promise<T> {
@@ -63,6 +69,20 @@ export class Client {
 
 export function callerEnv(): Record<string, string> {
   return Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
+}
+
+/** Asks the daemon to exit, skipping the version check so any client can stop any daemon. False if none runs. */
+export async function stopDaemon(): Promise<boolean> {
+  let socket: net.Socket;
+  try {
+    socket = await connectOnce();
+  } catch {
+    return false;
+  }
+  socket.on('error', () => {});
+  socket.write(JSON.stringify({ id: 1, method: 'stop' }) + '\n');
+  await new Promise((resolve) => socket.once('close', resolve));
+  return true;
 }
 
 function connectOnce(): Promise<net.Socket> {

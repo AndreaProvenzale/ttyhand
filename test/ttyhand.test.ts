@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client as DaemonClient } from '../src/client.js';
 import { encodeKey } from '../src/keys.js';
 import { plainText } from '../src/session.js';
 
@@ -14,11 +16,13 @@ const CLI = path.resolve(import.meta.dirname, '../dist/cli.js');
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'tth-'));
 const env = { ...process.env, TTYHAND_HOME: HOME } as Record<string, string>;
 
+const clients: Client[] = [];
 const cli = async (...args: string[]) => (await promisify(execFile)(CLI, args, { env })).stdout;
 
 async function mcpClient() {
   const client = new Client({ name: 'ttyhand-test', version: '0' });
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [CLI, 'mcp'], env }));
+  clients.push(client);
   const call = async (name: string, args: Record<string, unknown> = {}) => {
     const res = (await client.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
     assert.ok(!res.isError, res.content[0].text);
@@ -31,6 +35,7 @@ const idOf = (screen: string) => screen.match(/^\[(\S+)/)![1];
 
 before(() => assert.ok(fs.existsSync(CLI), 'run `pnpm build` first'));
 after(async () => {
+  await Promise.all(clients.map((c) => c.close()));
   await cli('stop').catch(() => {});
   fs.rmSync(HOME, { recursive: true, force: true });
 });
@@ -49,6 +54,31 @@ test('encodeKey follows application-cursor mode and modifiers', () => {
   assert.equal(encodeKey('Alt+X', false), '\x1bX');
   assert.equal(encodeKey('Alt+Left', false), '\x1b\x1b[D');
   assert.throws(() => encodeKey('Enterr', false), /unknown key "Enterr"/);
+});
+
+test('a daemon speaking another protocol is refused on every call, and stop still reaches it', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tth-skew-'));
+  let stopped = false;
+  const daemon = net.createServer((socket) => {
+    socket.setEncoding('utf8');
+    socket.on('data', (data: string) => {
+      for (const { id, method } of data.split('\n').filter(Boolean).map((l) => JSON.parse(l))) {
+        if (method === 'stop') stopped = true;
+        socket.write(JSON.stringify(method === 'hello' ? { id, error: { message: 'protocol mismatch' } } : { id, result: [] }) + '\n');
+        if (method === 'stop') socket.destroy();
+      }
+    });
+  });
+  await new Promise<void>((r) => daemon.listen(path.join(home, 'daemon.sock'), r));
+  process.env.TTYHAND_HOME = home;
+  const client = new DaemonClient(true);
+  await assert.rejects(client.call('list'), /protocol mismatch/);
+  await assert.rejects(client.call('list'), /protocol mismatch/);
+  delete process.env.TTYHAND_HOME;
+  await promisify(execFile)(CLI, ['stop'], { env: { ...env, TTYHAND_HOME: home } });
+  assert.ok(stopped);
+  daemon.close();
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 describe('over MCP', () => {
@@ -80,6 +110,34 @@ describe('over MCP', () => {
     assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8')).name, 'demo-pkg');
     await client.close();
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test('a silent pause on an empty line is not taken for a prompt', async () => {
+    const { client, call } = await mcpClient();
+    const script = 'console.log("loading"); setTimeout(() => process.stdout.write("ready> "), 1000); process.stdin.resume()';
+    assert.match(await call('spawn', { cmd: 'node', args: ['-e', script] }), /waiting_input[^\n]*\nloading\nready>/);
+    await client.close();
+  });
+
+  test('wait after a running result, until exit, and for a pattern', async () => {
+    const { client, call } = await mcpClient();
+    const ticker = 'let i = 0; const t = setInterval(() => { process.stdout.write(`\\rstep ${++i}`); if (i === 15) { clearInterval(t); process.stdout.write("\\nname? "); } }, 100); process.stdin.resume()';
+    const id = idOf(await call('spawn', { cmd: 'node', args: ['-e', ticker], timeout_ms: 300 }));
+    assert.match(await call('wait', { id, pattern: 'step [5-9]' }), /running[^\n]* matched\]/);
+    assert.match(await call('wait', { id }), /waiting_input[^\n]*\]\nstep 15\nname\? ?$/);
+    assert.match(await call('wait', { id, pattern: 'never', timeout_ms: 200 }), /no_match/);
+    await call('send', { id, keys: ['Ctrl+C'] });
+    assert.match(await call('wait', { id, until: 'exit' }), /exited/);
+    await client.close();
+  });
+
+  test('resize reaches the program', async () => {
+    const { client, call } = await mcpClient();
+    const id = idOf(await call('spawn', { cmd: 'python3' }));
+    await call('resize', { id, cols: 60, rows: 12 });
+    assert.match(await call('send', { id, text: 'import shutil; shutil.get_terminal_size()', keys: ['Enter'] }), /columns=60, lines=12/);
+    await call('kill', { id });
+    await client.close();
   });
 
   test('programs die with their connection and stay private to it', async () => {

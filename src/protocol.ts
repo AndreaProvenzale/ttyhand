@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type State = 'waiting_input' | 'running' | 'exited';
 export type ReadMode = 'screen' | 'new_output' | 'scrollback';
@@ -14,6 +14,8 @@ export interface Result {
   state: State;
   exitCode?: number;
   truncated?: boolean;
+  /** Set when the call waited for a pattern. */
+  matched?: boolean;
 }
 
 export interface SpawnParams {
@@ -30,6 +32,8 @@ export interface SpawnParams {
 }
 export interface SendParams { id: string; text?: string; keys?: string[]; wait?: boolean; timeout_ms?: number }
 export interface ReadParams { id: string; mode?: ReadMode; since?: number }
+export interface WaitParams { id: string; until?: 'input' | 'exit'; pattern?: string; timeout_ms?: number }
+export interface ResizeParams { id: string; cols: number; rows: number; timeout_ms?: number }
 export interface KillParams { id: string; signal?: string }
 export interface HelloParams { version: number; owner: boolean }
 
@@ -51,6 +55,6 @@ export const logPath = () => path.join(homeDir(), 'daemon.log');
 /** Same text for MCP and CLI: one status line, then the screen. */
 export function formatResult(r: Result): string {
   const status = r.state === 'exited' ? `exited code=${r.exitCode ?? '?'}` : r.state;
-  const extra = r.truncated ? ' truncated' : '';
+  const extra = (r.truncated ? ' truncated' : '') + (r.matched === undefined ? '' : r.matched ? ' matched' : ' no_match');
   return `[${r.id} ${status} seq=${r.seq} cursor=${r.cursor.row},${r.cursor.col}${extra}]\n${r.text}`;
 }
