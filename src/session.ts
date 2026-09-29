@@ -10,6 +10,8 @@ const IDLE_MS = 400;
 const BARE_LINE_IDLE_MS = 2000;
 const POLL_MS = 50;
 const KEY_GAP_MS = 100;
+// Vim and readline wait this long to tell a lone Esc from the start of a sequence.
+const ESC_MS = 1000;
 const LOG_CAP = 1_000_000;
 const KILL_GRACE_MS = 2000;
 const SCROLLBACK = 5000;
@@ -138,7 +140,7 @@ export class Session {
 
   private write(data: string) {
     this.pty.write(data);
-    this.lastInputAt = Date.now();
+    this.lastInputAt = Date.now() + (/^\x1b(?:[^[O].*)?$/s.test(data) ? ESC_MS : 0);
   }
 
   private async settle(deadline: number) {
@@ -169,11 +171,11 @@ export class Session {
     if (mode === 'new_output') {
       const from = since ?? this.logStart;
       truncated = from < this.logStart;
-      text = plainText(this.log.slice(Math.max(from - this.logStart, 0)));
+      text = plainText(this.log.slice(Math.max(from - this.logStart, 0))) || '(no new output)';
     } else {
       const first = mode === 'screen' ? buf.viewportY : 0;
       const last = mode === 'screen' ? buf.viewportY + this.term.rows : buf.length;
-      text = dropTrailingBlanks(renderLines(buf, first, last)).join('\n');
+      text = dropTrailingBlanks(renderLines(buf, first, last, mode === 'scrollback')).join('\n');
     }
     return {
       id: this.id,
@@ -288,13 +290,13 @@ function highlightStyle(cell: xterm.IBufferCell): string {
  * Buffer lines as right-trimmed text, with highlighted runs wrapped in «»: reverse video or a background, unless it
  * is the style most of the text is in (a dialog's box). That is how menus, pickers and lists show the selection.
  */
-function renderLines(buf: xterm.IBuffer, first: number, last: number): string[] {
+function renderLines(buf: xterm.IBuffer, first: number, last: number, joinWrapped: boolean): string[] {
   const cell = buf.getNullCell();
-  const rows: { chars: string[]; styles: string[] }[] = [];
+  const rows: { chars: string[]; styles: string[]; wrapped: boolean }[] = [];
   const textCells = new Map<string, number>();
   for (let y = first; y < last; y++) {
     const line = buf.getLine(y);
-    const row = { chars: [] as string[], styles: [] as string[] };
+    const row = { chars: [] as string[], styles: [] as string[], wrapped: !!line?.isWrapped };
     for (let x = 0; line && x < line.length; x++) {
       line.getCell(x, cell);
       if (cell.getWidth() === 0) continue;
@@ -309,7 +311,8 @@ function renderLines(buf: xterm.IBuffer, first: number, last: number): string[] 
   }
   const base = [...textCells].reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0])[0];
   const marked = (style: string) => style !== '' && style !== base;
-  return rows.map(({ chars, styles }) => {
+  const lines: string[] = [];
+  for (const { chars, styles, wrapped } of rows) {
     let out = '';
     for (let x = 0; x < chars.length; ) {
       if (!marked(styles[x])) {
@@ -323,9 +326,11 @@ function renderLines(buf: xterm.IBuffer, first: number, last: number): string[] 
       out += text ? run.replace(text, `«${text}»`) : run;
       x = end;
     }
-    // Full-screen programs clear lines by writing spaces.
-    return out.trimEnd();
-  });
+    if (joinWrapped && wrapped && lines.length) lines[lines.length - 1] += out;
+    else lines.push(out);
+  }
+  // Full-screen programs clear lines by writing spaces.
+  return lines.map((line) => line.trimEnd());
 }
 
 function dropTrailingBlanks(lines: string[]): string[] {

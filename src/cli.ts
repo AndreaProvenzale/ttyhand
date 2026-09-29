@@ -22,7 +22,8 @@ const USAGE = `Usage: ttyhand <command>
   stop       stop the daemon and every program it owns
 
 Keys: ${KEY_NAMES}
-On screen, highlighted text (the selection in menus and lists) is wrapped in «».`;
+On screen, text in reverse video or on a coloured background (the selection in menus and lists) is wrapped in «»; bold or coloured text is not marked.
+The first line of a result gives the program id (id=…) and the 1-based cursor position.`;
 
 type Flags = Record<string, string | true>;
 const BOOLEAN_FLAGS = new Set(['no-wait', 'help']);
