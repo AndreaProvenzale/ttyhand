@@ -36,6 +36,7 @@ export class Session {
   lastInputAt = 0;
   lastUsedAt = Date.now();
   exitCode?: number;
+  private escHeldUntil = 0;
   private log = '';
   private logStart = 0;
   private queue: Promise<unknown> = Promise.resolve();
@@ -80,13 +81,13 @@ export class Session {
     if (text === undefined && !keys.length) throw new Error('nothing to send: pass text, keys or both');
     for (const key of keys) encodeKey(key, false);
     const deadline = Date.now() + timeoutMs;
-    if (text) this.write(text);
+    if (text) await this.write(text);
     for (const [i, key] of keys.entries()) {
       // Line-at-a-time readers (npm init, inquirer) drop input that arrives before they ask again.
       if (text || i > 0) await this.settle(deadline);
       if (this.exited) break;
       await this.flush();
-      this.write(encodeKey(key, this.term.modes.applicationCursorKeysMode));
+      await this.write(encodeKey(key, this.term.modes.applicationCursorKeysMode));
     }
     const state = wait ? await this.waitIdle(Math.max(deadline - Date.now(), 0), this.lastInputAt) : 'running';
     return this.snapshot('screen', undefined, state);
@@ -138,9 +139,15 @@ export class Session {
     return () => this.watchers.delete(fn);
   }
 
-  private write(data: string) {
+  private async write(data: string) {
+    // Input that follows a lone Esc too soon reads as Alt+key or an escape sequence.
+    const hold = this.escHeldUntil - Date.now();
+    if (hold > 0) await sleep(hold);
     this.pty.write(data);
-    this.lastInputAt = Date.now() + (/^\x1b(?:[^[O].*)?$/s.test(data) ? ESC_MS : 0);
+    const esc = data.endsWith('\x1b');
+    // A lone Esc takes effect once the program stops waiting for the rest of a sequence.
+    this.lastInputAt = Date.now() + (esc ? ESC_MS : 0);
+    this.escHeldUntil = esc ? this.lastInputAt + KEY_GAP_MS : 0;
   }
 
   private async settle(deadline: number) {
@@ -169,6 +176,7 @@ export class Session {
     let text: string;
     let truncated = false;
     if (mode === 'new_output') {
+      if (since !== undefined && since > this.seq) throw new Error(`since=${since} is past ${this.id}'s output (seq=${this.seq}); pass the seq of an earlier ${this.id} result`);
       const from = since ?? this.logStart;
       truncated = from < this.logStart;
       text = plainText(this.log.slice(Math.max(from - this.logStart, 0))) || '(no new output)';
@@ -292,45 +300,48 @@ function highlightStyle(cell: xterm.IBufferCell): string {
  */
 function renderLines(buf: xterm.IBuffer, first: number, last: number, joinWrapped: boolean): string[] {
   const cell = buf.getNullCell();
-  const rows: { chars: string[]; styles: string[]; wrapped: boolean }[] = [];
+  const rows: { chars: string[]; styles: string[] }[] = [];
   const textCells = new Map<string, number>();
   for (let y = first; y < last; y++) {
     const line = buf.getLine(y);
-    const row = { chars: [] as string[], styles: [] as string[], wrapped: !!line?.isWrapped };
+    const joined = joinWrapped && !!line?.isWrapped && rows.length > 0;
+    const row = joined ? rows[rows.length - 1] : { chars: [] as string[], styles: [] as string[] };
+    // A wide character that did not fit leaves an empty cell before the wrap.
+    if (joined && row.chars.at(-1) === '') {
+      row.chars.pop();
+      row.styles.pop();
+    }
     for (let x = 0; line && x < line.length; x++) {
       line.getCell(x, cell);
       if (cell.getWidth() === 0) continue;
       const style = highlightStyle(cell);
-      const chars = cell.getChars() || ' ';
+      const chars = cell.getChars();
       row.chars.push(chars);
       row.styles.push(style);
       // Only text counts: a backdrop of blank cells often shares its colour with the selection.
-      if (chars !== ' ') textCells.set(style, (textCells.get(style) ?? 0) + 1);
+      if (chars.trim()) textCells.set(style, (textCells.get(style) ?? 0) + 1);
     }
-    rows.push(row);
+    if (!joined) rows.push(row);
   }
   const base = [...textCells].reduce((a, b) => (b[1] > a[1] ? b : a), ['', 0])[0];
   const marked = (style: string) => style !== '' && style !== base;
-  const lines: string[] = [];
-  for (const { chars, styles, wrapped } of rows) {
+  return rows.map(({ chars, styles }) => {
     let out = '';
     for (let x = 0; x < chars.length; ) {
       if (!marked(styles[x])) {
-        out += chars[x++];
+        out += chars[x++] || ' ';
         continue;
       }
       let end = x;
       while (end < chars.length && marked(styles[end])) end++;
-      const run = chars.slice(x, end).join('');
+      const run = chars.slice(x, end).map((c) => c || ' ').join('');
       const text = run.trim();
       out += text ? run.replace(text, `«${text}»`) : run;
       x = end;
     }
-    if (joinWrapped && wrapped && lines.length) lines[lines.length - 1] += out;
-    else lines.push(out);
-  }
-  // Full-screen programs clear lines by writing spaces.
-  return lines.map((line) => line.trimEnd());
+    // Full-screen programs clear lines by writing spaces.
+    return out.trimEnd();
+  });
 }
 
 function dropTrailingBlanks(lines: string[]): string[] {

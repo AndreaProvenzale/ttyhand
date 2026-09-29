@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const SANDBOX_HELP = 'a sandbox may be blocking it; see "Sandboxes" in the ttyhand README';
 
 export type State = 'waiting_input' | 'running' | 'exited';
@@ -62,5 +62,5 @@ export const logPath = () => path.join(homeDir(), 'daemon.log');
 export function formatResult(r: Result): string {
   const status = r.state === 'exited' ? `exited code=${r.exitCode ?? '?'}` : r.state;
   const extra = (r.truncated ? ' truncated' : '') + (r.matched === undefined ? '' : r.matched ? ' pattern=matched' : ' pattern=no_match');
-  return `[id=${r.id} ${status} seq=${r.seq} cursor=row ${r.cursor.row + 1},col ${r.cursor.col + 1}${extra}]\n${r.text}`;
+  return `[id=${r.id} ${status} seq=${r.seq} cursor=row${r.cursor.row + 1},col${r.cursor.col + 1}${extra}]\n${r.text}`;
 }

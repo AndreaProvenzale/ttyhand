@@ -6,6 +6,8 @@ const FIXED: Record<string, string> = {
   escape: '\x1b',
   backspace: '\x7f',
   space: ' ',
+  // For the CLI, where --keys is comma-separated.
+  comma: ',',
   insert: '\x1b[2~',
   delete: '\x1b[3~',
   pageup: '\x1b[5~',

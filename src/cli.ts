@@ -10,10 +10,13 @@ const USAGE = `Usage: ttyhand <command>
   spawn [--name N] [--cwd DIR] [--cols N] [--rows N] [--timeout MS] <cmd> [args...]
   send <id> [text] [--keys K1,K2] [--no-wait] [--timeout MS]
              text is typed literally, then keys are pressed: send py-1 '1+1' --keys Enter
+             a single character is a key too (--keys Esc,:,w,q,Enter); a comma is Comma
   wait <id> [--until input|exit] [--pattern REGEX] [--timeout MS]
              after a running result; --pattern returns once the screen matches
   resize <id> <cols> <rows> [--timeout MS]
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
+             new_output: text printed since an earlier result's seq, or "(no new output)"
+             scrollback: the whole history, with wrapped lines joined
   kill <id> [--signal SIG]
   list
   attach <id>  watch a program live, read-only; Ctrl+C detaches
@@ -23,7 +26,7 @@ const USAGE = `Usage: ttyhand <command>
 
 Keys: ${KEY_NAMES}
 On screen, text in reverse video or on a coloured background (the selection in menus and lists) is wrapped in «»; bold or coloured text is not marked.
-The first line of a result gives the program id (id=…) and the 1-based cursor position.`;
+The first line of a result gives the program id (id=…) and the cursor's 1-based row and column on the screen.`;
 
 type Flags = Record<string, string | true>;
 const BOOLEAN_FLAGS = new Set(['no-wait', 'help']);
@@ -138,6 +141,7 @@ async function main() {
         const { flags, pos } = parse(rest);
         need(pos, 1, 'send <id> [text] [--keys K1,K2]');
         const keys = str(flags, 'keys')?.split(',');
+        if (keys?.includes('')) throw new Error('--keys is comma-separated and has an empty key; to press a comma, use Comma');
         print(await client.call('send', { id: pos[0], text: pos[1], keys, wait: !flags['no-wait'], timeout_ms: num(flags, 'timeout') }));
         break;
       }

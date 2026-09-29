@@ -54,6 +54,7 @@ test('encodeKey follows application-cursor mode and modifiers', () => {
   assert.equal(encodeKey('Ctrl+C', false), '\x03');
   assert.equal(encodeKey('Alt+X', false), '\x1bX');
   assert.equal(encodeKey('Alt+Left', false), '\x1b\x1b[D');
+  assert.equal(encodeKey('Comma', false), ',');
   assert.throws(() => encodeKey('Enterr', false), /unknown key "Enterr"/);
 });
 
@@ -150,12 +151,15 @@ describe('over MCP', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tth-vim-'));
     const file = path.join(dir, 'notes.txt');
     const { client, call } = await mcpClient();
-    const id = idOf(await call('spawn', { cmd: 'vim', args: ['-u', 'NONE', file] }));
+    const id = idOf(await call('spawn', { cmd: 'vim', args: ['-u', 'NONE', '-N', file] }));
     const screen = await call('send', { id, text: 'ihello\nworld', keys: ['Esc'] });
     assert.match(screen, /\]\nhello\nworld\n~\n/);
     assert.doesNotMatch(screen, / $/m);
+    // Esc O x too close together reads as keypad 8: the hold follows text ending in Esc, and carries into the next call.
+    await call('send', { id, text: 'A.\x1b', keys: ['O', 'x', 'Esc'], wait: false });
+    assert.match(await call('send', { id, keys: ['O', 'y', 'Esc'] }), /\]\nhello\ny\nx\nworld\.\n/);
     assert.match(await call('send', { id, keys: [':', 'w', 'q', 'Enter'] }), /exited code=0/);
-    assert.equal(fs.readFileSync(file, 'utf8'), 'hello\nworld\n');
+    assert.equal(fs.readFileSync(file, 'utf8'), 'hello\ny\nx\nworld.\n');
     await client.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -172,11 +176,12 @@ describe('over MCP', () => {
   test('a name held by an exited program says so; empty new_output and cursor are labelled', async () => {
     const { client, call } = await mcpClient();
     const first = await call('spawn', { cmd: 'python3', name: 'py' });
-    assert.match(first, /^\[id=py waiting_input seq=\d+ cursor=row \d+,col \d+\]/);
+    assert.match(first, /^\[id=py waiting_input seq=\d+ cursor=row\d+,col\d+\]/);
     await call('send', { id: 'py', text: 'exit()', keys: ['Enter'] });
     await assert.rejects(call('spawn', { cmd: 'python3', name: 'py' }), /taken by an exited program \(code 0\); kill it/);
-    const seq = first.match(/seq=(\d+)/)![1];
-    assert.match(await call('read', { id: 'py', mode: 'new_output', since: Number(seq) + 100000 }), /\n\(no new output\)$/);
+    const seq = Number((await call('read', { id: 'py' })).match(/seq=(\d+)/)![1]);
+    assert.match(await call('read', { id: 'py', mode: 'new_output', since: seq }), /\n\(no new output\)$/);
+    await assert.rejects(call('read', { id: 'py', mode: 'new_output', since: seq + 1 }), /is past py's output/);
     await client.close();
   });
 
@@ -186,6 +191,11 @@ describe('over MCP', () => {
     await call('send', { id, text: 'print("x" * 50)', keys: ['Enter'] });
     assert.match(await call('read', { id, mode: 'scrollback' }), /\nx{50}\n/);
     await call('kill', { id });
+    // A wide character that does not fit wraps early; a highlight across the wrap stays one run.
+    const script = 'process.stdout.write("x".repeat(19) + "字字\\n" + "y".repeat(18) + "\\x1b[7mabcd\\x1b[0m\\n"); process.stdin.resume()';
+    const wide = idOf(await call('spawn', { cmd: 'node', args: ['-e', script], cols: 20 }));
+    assert.match(await call('read', { id: wide, mode: 'scrollback' }), /\]\nx{19}字字\ny{18}«abcd»$/);
+    await call('kill', { id: wide });
     await client.close();
   });
 

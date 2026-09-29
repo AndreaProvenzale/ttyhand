@@ -9,7 +9,7 @@ import { formatResult, type ListEntry, type Result } from './protocol.js';
 const { version } = createRequire(import.meta.url)('../package.json');
 
 const STATUS_HELP =
-  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code. The first line also gives the program id and the cursor position (1-based). Text in reverse video or on a coloured background, typically the selected item in a menu or list, is wrapped in «»; bold or coloured text is not marked.';
+  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code. The first line also gives the program id and the 1-based row and column of the cursor on the screen. Text in reverse video or on a coloured background, typically the selected item in a menu or list, is wrapped in «»; bold or coloured text is not marked.';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const screen = (r: Result) => text(formatResult(r));
