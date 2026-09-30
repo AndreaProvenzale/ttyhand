@@ -22,6 +22,8 @@ The screen comes back as plain text. Highlighted text, such as the selected item
 
 MCP (Claude Code): `claude mcp add ttyhand -- npx -y ttyhand mcp`
 
+CLI: `npm i -g ttyhand`. `npx ttyhand <command>` works too, but checks the registry on every call.
+
 ## Sandboxes
 
 MCP servers run outside Claude Code's sandbox, so ttyhand over MCP needs no setup. The CLI called from a sandboxed shell needs three things: a writable `TTYHAND_HOME`, its Unix socket and pseudo-terminals.

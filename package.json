@@ -2,6 +2,22 @@
   "name": "ttyhand",
   "version": "0.0.1",
   "description": "Let agents drive interactive terminal programs through a real PTY — over MCP or a CLI.",
+  "keywords": [
+    "mcp",
+    "pty",
+    "terminal",
+    "agent",
+    "repl",
+    "tui",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AndreaProvenzale/ttyhand.git"
+  },
+  "homepage": "https://github.com/AndreaProvenzale/ttyhand#readme",
+  "bugs": "https://github.com/AndreaProvenzale/ttyhand/issues",
+  "author": "Andrea Provenzale",
   "type": "module",
   "files": [
     "dist"
