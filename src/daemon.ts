@@ -248,7 +248,7 @@ function newId(cmd: string, name?: string): string {
   if (name) {
     if (!/^[\w.-]+$/.test(name)) throw new Error('name may only contain letters, digits, "_", "-" and "."');
     const taken = sessions.get(name);
-    if (taken) throw new Error(`"${name}" is taken by ${taken.exited ? `an exited program (code ${taken.exitCode}); kill it to free the name` : 'a running program'}, or pick another name`);
+    if (taken) throw new Error(`"${name}" is taken by ${taken.exited ? `an exited program (code ${taken.exitCode}); kill it to free the name, or` : 'a running program;'} pick another name`);
     return name;
   }
   const base = path.basename(cmd).replace(/[^\w.-]/g, '') || 'prog';
