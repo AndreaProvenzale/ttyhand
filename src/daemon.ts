@@ -82,7 +82,8 @@ function acquireLock(): boolean {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const pid = Number(fs.readFileSync(lockPath(), 'utf8'));
       // An empty lock means another daemon is mid-write.
-      if (!pid || isAlive(pid)) return false;
+      // Our own pid was written by a dead daemon in another PID namespace (a Linux sandbox).
+      if (!pid || (pid !== process.pid && isAlive(pid))) return false;
       fs.rmSync(lockPath(), { force: true });
     }
   }
@@ -199,7 +200,7 @@ async function handle(conn: Conn, method: string, params: any, reqId: number): P
     case 'list':
       return [...sessions.values()]
         .filter((s) => !conn.owner || s.owner === conn)
-        .map((s): ListEntry => ({ id: s.id, cmd: [s.opts.cmd, ...s.opts.args].join(' '), state: s.exited ? 'exited' : 'running', exitCode: s.exitCode }));
+        .map((s): ListEntry => ({ id: s.id, cmd: [s.opts.cmd, ...s.opts.args].join(' '), state: s.currentState(s.lastInputAt), exitCode: s.exitCode }));
     case 'stop':
       setImmediate(shutdown);
       return { stopping: true };
@@ -218,6 +219,7 @@ async function spawn(conn: Conn, p: SpawnParams) {
   const { COLUMNS, LINES, ...inherited } = p.inherit_env ?? (process.env as Record<string, string>);
   const env: Record<string, string> = { ...inherited, ...TERMINAL_ENV, ...p.env };
   const cwd = p.cwd ?? process.cwd();
+  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`);
   if (!findExecutable(p.cmd, env.PATH ?? '', cwd)) throw new Error(`command not found: ${p.cmd}`);
   const id = newId(p.cmd, p.name);
   let session: Session;

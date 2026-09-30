@@ -14,13 +14,15 @@ ttyhand attach python3-1                       # a human watches live, read-only
 ttyhand kill python3-1
 ```
 
-Every result starts with a status line, `[id=python3-1 waiting_input seq=166 cursor=row3,col5]`, which names the program id the other commands take and the cursor's 1-based row and column on the screen. The state is `waiting_input` (your turn), `running` (still busy; call `wait`) or `exited code=N`. "Your turn" means the program has been quiet for 400 ms with the cursor after some text, or for 2 s on an empty line. On Linux the kernel also says whether the program is blocked reading the terminal or busy elsewhere, which settles silent pauses. Elsewhere it is a guess from quiet time, so a program that is silent while busy (a `sleep`, a slow network call) can show `waiting_input`; use `wait` with a `pattern`.
+Every result starts with a status line, `[id=python3-1 waiting_input seq=166 cursor=row3,col5]`, which names the program id the other commands take and the cursor's 1-based row and column on the screen. The state is `waiting_input` (your turn), `running` (still busy; call `wait`) or `exited code=N`. "Your turn" means the program has been quiet for 400 ms with the cursor after some text, or for 2 s on an empty line. On Linux the kernel also says whether the program is blocked reading the terminal or busy elsewhere, which settles silent pauses in programs that block in a read or a sleep. Otherwise it is a guess from quiet time: on macOS, or in a program that waits in an event loop (node, npm), a silent pause while busy (a `sleep`, a timer, a slow network call) can show `waiting_input`; use `wait` with a `pattern`.
 
-The screen comes back as plain text. Highlighted text, such as the selected item in a menu, a picker or htop's process list, is wrapped in `«»`: reverse video or a coloured background. Bold or coloured text is not marked. `--keys` also takes single characters (`--keys Esc,:,w,q,Enter`); a comma is `Comma`.
+The screen comes back as plain text. Highlighted text, such as the selected item in a menu, a picker or htop's process list, is wrapped in `«»`: reverse video or a coloured background. Bold or coloured text is not marked. Lines are right-trimmed, so a `--pattern` for a prompt leaves out its trailing space (`'\(Pdb\)$'`). `--keys` also takes single characters (`--keys Esc,:,w,q,Enter`); a comma is `Comma`.
 
 `read --mode new_output --since SEQ` returns the text printed since the result with that seq, or `(no new output)`. `--mode scrollback` returns the whole history, with lines the terminal wrapped joined back together.
 
 MCP (Claude Code): `claude mcp add ttyhand -- npx -y ttyhand mcp`
+
+Runs on macOS and glibc Linux, not Alpine (musl). CLI: `npm i -g ttyhand`. `npx ttyhand <command>` works too, but checks the registry on every call.
 
 ## Sandboxes
 
@@ -41,7 +43,7 @@ mkdir -m 700 /tmp/ttyhand
 TTYHAND_HOME=/tmp/ttyhand srt -c 'ttyhand spawn python3'
 ```
 
-The socket is listed by its real path: `/tmp` is a link to `/private/tmp` on macOS. Linux ignores `allowUnixSockets` and `allowPty`; set `"allowAllUnixSockets": true` in `network` there.
+The socket is listed by its real path: `/tmp` is a link to `/private/tmp` on macOS. Linux ignores `allowUnixSockets` and `allowPty`; set `"allowAllUnixSockets": true` in `network` there. A daemon started inside the Linux sandbox gets PTYs without a setting, but ends with the command, so every command starts from scratch; start the daemon outside instead, as below.
 
 Claude Code's sandbox blocks pseudo-terminals and has no setting to allow them, so a daemon started inside it cannot open a terminal. Use MCP, or start the daemon outside the sandbox (`TTYHAND_HOME=/tmp/ttyhand ttyhand list`) and allow its socket with `sandbox.network.allowUnixSockets`. That socket lets sandboxed commands start any program outside the sandbox, so it grants as much as `sandbox.excludedCommands` would.
 

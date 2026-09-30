@@ -196,7 +196,7 @@ export class Session {
     };
   }
 
-  private currentState(since = 0): State {
+  currentState(since = 0): State {
     const now = Date.now();
     // Output can trail the exit event; give it a moment to land.
     if (this.exited) return now - this.lastOutputAt >= POLL_MS ? 'exited' : 'running';

@@ -13,6 +13,7 @@ const USAGE = `Usage: ttyhand <command>
              a single character is a key too (--keys Esc,:,w,q,Enter); a comma is Comma
   wait <id> [--until input|exit] [--pattern REGEX] [--timeout MS]
              after a running result; --pattern returns once the screen matches
+             lines are right-trimmed, so leave out a prompt's trailing space: --pattern '\\(Pdb\\)$'
   resize <id> <cols> <rows> [--timeout MS]
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
              new_output: text printed since an earlier result's seq, or "(no new output)"
@@ -91,7 +92,7 @@ async function attach(client: Client, id: string) {
   let end!: (event: AttachEvent) => void;
   const ended = new Promise<AttachEvent>((resolve) => (end = resolve));
   const view = await client.call<AttachResult>('attach', { id }, (event) => (event.data ? show(event.data) : end(event)));
-  const size = out.columns === view.cols && out.rows === view.rows ? '' : ` (it is ${view.cols}x${view.rows}, this terminal ${out.columns}x${out.rows})`;
+  const size = !out.isTTY || (out.columns === view.cols && out.rows === view.rows) ? '' : ` (it is ${view.cols}x${view.rows}, this terminal ${out.columns}x${out.rows})`;
   out.write(`attached to ${id}${size}, read-only; Ctrl+C detaches\r\n`);
   show(view.picture);
   if (view.exitCode !== undefined) end({ exit: view.exitCode });
