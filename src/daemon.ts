@@ -247,7 +247,8 @@ function findExecutable(cmd: string, pathVar: string, cwd: string): boolean {
 function newId(cmd: string, name?: string): string {
   if (name) {
     if (!/^[\w.-]+$/.test(name)) throw new Error('name may only contain letters, digits, "_", "-" and "."');
-    if (sessions.has(name)) throw new Error(`"${name}" is already running`);
+    const taken = sessions.get(name);
+    if (taken) throw new Error(`"${name}" is taken by ${taken.exited ? `an exited program (code ${taken.exitCode}); kill it to free the name, or` : 'a running program;'} pick another name`);
     return name;
   }
   const base = path.basename(cmd).replace(/[^\w.-]/g, '') || 'prog';

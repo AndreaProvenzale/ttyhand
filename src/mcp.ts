@@ -9,7 +9,7 @@ import { formatResult, type ListEntry, type Result } from './protocol.js';
 const { version } = createRequire(import.meta.url)('../package.json');
 
 const STATUS_HELP =
-  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code. Highlighted text, such as the selected item in a menu or list, is wrapped in «».';
+  'The result starts with a status line: waiting_input (quiet, most likely your turn), running (still busy — call wait), or exited with its code. The first line also gives the program id and the 1-based row and column of the cursor on the screen. Text in reverse video or on a coloured background, typically the selected item in a menu or list, is wrapped in «»; bold or coloured text is not marked.';
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
 const screen = (r: Result) => text(formatResult(r));
@@ -17,7 +17,7 @@ const screen = (r: Result) => text(formatResult(r));
 export async function runMcp() {
   const client = new Client(true);
   const server = new McpServer({ name: 'ttyhand', version });
-  const id = z.string().describe('Program id returned by spawn');
+  const id = z.string().describe('Program id: the id=… value on the first line of spawn\'s result');
   const timeout_ms = z.number().int().min(0).optional().describe('Max time to wait for the program to go quiet (default 10000)');
   const cols = z.number().int().min(20).max(500);
   const rows = z.number().int().min(5).max(200);
@@ -25,7 +25,7 @@ export async function runMcp() {
   server.registerTool(
     'spawn',
     {
-      description: `Start an interactive program (REPL, installer wizard, debugger, TUI) in a real terminal and return its screen once it goes quiet. Returns an id for the other tools. ${STATUS_HELP}`,
+      description: `Start an interactive program (REPL, installer wizard, debugger, TUI) in a real terminal and return its screen once it goes quiet. The id in the first line of every result (id=…) is what the other tools take. ${STATUS_HELP}`,
       inputSchema: {
         cmd: z.string().describe('Executable, e.g. "python3"'),
         args: z.array(z.string()).optional().describe('Arguments, one per item'),
@@ -47,7 +47,7 @@ export async function runMcp() {
       inputSchema: {
         id,
         text: z.string().optional().describe('Typed exactly as given; press Enter and other special keys with keys'),
-        keys: z.array(z.string()).optional().describe(`Keys pressed after text, in order: ${KEY_NAMES}`),
+        keys: z.array(z.string()).optional().describe(`Keys pressed after text, in order, so {"text": "ihi", "keys": ["Esc", ":", "w", "q", "Enter"]} works: ${KEY_NAMES}`),
         wait: z.boolean().optional().describe('Wait for the program to go quiet before returning (default true)'),
         timeout_ms,
       },
@@ -58,7 +58,7 @@ export async function runMcp() {
   server.registerTool(
     'wait',
     {
-      description: `Wait without typing, then return the screen: for when a result said running (an install, a build, a slow start). Returns once the program wants input again, or with until=exit once it exits. pattern returns as soon as the screen matches it instead, and the status line says matched or no_match. ${STATUS_HELP}`,
+      description: `Wait without typing, then return the screen: for when a result said running (an install, a build, a slow start). Returns once the program wants input again, or with until=exit once it exits. pattern returns as soon as the screen matches it instead, and the status line says pattern=matched or pattern=no_match. ${STATUS_HELP}`,
       inputSchema: {
         id,
         until: z.enum(['input', 'exit']).optional().describe('Default input'),
@@ -83,7 +83,7 @@ export async function runMcp() {
     'read',
     {
       description:
-        'Return the current screen without typing anything; highlighted text is wrapped in «». mode=new_output returns plain text printed since an earlier result (pass its seq as since); mode=scrollback returns the whole history.',
+        'Return the current screen without typing anything; highlighted text is wrapped in «». mode=new_output returns plain text printed since an earlier result (pass its seq as since; \'(no new output)\' means nothing new); mode=scrollback returns the whole history, with wrapped lines joined.',
       inputSchema: {
         id,
         mode: z.enum(['screen', 'new_output', 'scrollback']).optional().describe('Default screen'),
