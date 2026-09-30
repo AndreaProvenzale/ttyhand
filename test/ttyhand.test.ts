@@ -179,6 +179,7 @@ describe('over MCP', () => {
     assert.match(first, /^\[id=py waiting_input seq=\d+ cursor=row\d+,col\d+\]/);
     await call('send', { id: 'py', text: 'exit()', keys: ['Enter'] });
     await assert.rejects(call('spawn', { cmd: 'python3', name: 'py' }), /taken by an exited program \(code 0\); kill it/);
+    await assert.rejects(call('spawn', { cmd: 'python3', cwd: '/nonexistent' }), /cwd is not a directory: \/nonexistent/);
     const seq = Number((await call('read', { id: 'py' })).match(/seq=(\d+)/)![1]);
     assert.match(await call('read', { id: 'py', mode: 'new_output', since: seq }), /\n\(no new output\)$/);
     await assert.rejects(call('read', { id: 'py', mode: 'new_output', since: seq + 1 }), /is past py's output/);

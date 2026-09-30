@@ -92,7 +92,7 @@ async function attach(client: Client, id: string) {
   let end!: (event: AttachEvent) => void;
   const ended = new Promise<AttachEvent>((resolve) => (end = resolve));
   const view = await client.call<AttachResult>('attach', { id }, (event) => (event.data ? show(event.data) : end(event)));
-  const size = out.columns === view.cols && out.rows === view.rows ? '' : ` (it is ${view.cols}x${view.rows}, this terminal ${out.columns}x${out.rows})`;
+  const size = !out.isTTY || (out.columns === view.cols && out.rows === view.rows) ? '' : ` (it is ${view.cols}x${view.rows}, this terminal ${out.columns}x${out.rows})`;
   out.write(`attached to ${id}${size}, read-only; Ctrl+C detaches\r\n`);
   show(view.picture);
   if (view.exitCode !== undefined) end({ exit: view.exitCode });

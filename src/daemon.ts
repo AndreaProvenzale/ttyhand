@@ -218,6 +218,7 @@ async function spawn(conn: Conn, p: SpawnParams) {
   const { COLUMNS, LINES, ...inherited } = p.inherit_env ?? (process.env as Record<string, string>);
   const env: Record<string, string> = { ...inherited, ...TERMINAL_ENV, ...p.env };
   const cwd = p.cwd ?? process.cwd();
+  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`cwd is not a directory: ${cwd}`);
   if (!findExecutable(p.cmd, env.PATH ?? '', cwd)) throw new Error(`command not found: ${p.cmd}`);
   const id = newId(p.cmd, p.name);
   let session: Session;
