@@ -13,6 +13,7 @@ const USAGE = `Usage: ttyhand <command>
              a single character is a key too (--keys Esc,:,w,q,Enter); a comma is Comma
   wait <id> [--until input|exit] [--pattern REGEX] [--timeout MS]
              after a running result; --pattern returns once the screen matches
+             lines are right-trimmed, so leave out a prompt's trailing space: --pattern '\\(Pdb\\)$'
   resize <id> <cols> <rows> [--timeout MS]
   read <id> [--mode screen|new_output|scrollback] [--since SEQ]
              new_output: text printed since an earlier result's seq, or "(no new output)"

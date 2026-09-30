@@ -62,7 +62,7 @@ export async function runMcp() {
       inputSchema: {
         id,
         until: z.enum(['input', 'exit']).optional().describe('Default input'),
-        pattern: z.string().optional().describe('JavaScript regex tested against the screen, ^ and $ per line, e.g. "Listening on|Error"'),
+        pattern: z.string().optional().describe('JavaScript regex tested against the screen, ^ and $ per line, e.g. "Listening on|Error". Lines are right-trimmed, so leave out a prompt\'s trailing space: "\\(Pdb\\)$", not "\\(Pdb\\) $"'),
         timeout_ms: z.number().int().min(0).optional().describe('Max time to wait (default 30000)'),
       },
       annotations: { readOnlyHint: true },

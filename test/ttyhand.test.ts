@@ -212,7 +212,7 @@ describe('over MCP', () => {
     const a = await mcpClient();
     const b = await mcpClient();
     const id = idOf(await a.call('spawn', { cmd: 'python3' }));
-    assert.match(await a.call('list'), new RegExp(id));
+    assert.match(await a.call('list'), new RegExp(`${id}\twaiting_input\tpython3`));
     assert.doesNotMatch(await b.call('list'), new RegExp(id));
     assert.match(await cli('list'), new RegExp(id));
     await a.client.close();

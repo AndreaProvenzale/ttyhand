@@ -199,7 +199,7 @@ async function handle(conn: Conn, method: string, params: any, reqId: number): P
     case 'list':
       return [...sessions.values()]
         .filter((s) => !conn.owner || s.owner === conn)
-        .map((s): ListEntry => ({ id: s.id, cmd: [s.opts.cmd, ...s.opts.args].join(' '), state: s.exited ? 'exited' : 'running', exitCode: s.exitCode }));
+        .map((s): ListEntry => ({ id: s.id, cmd: [s.opts.cmd, ...s.opts.args].join(' '), state: s.currentState(s.lastInputAt), exitCode: s.exitCode }));
     case 'stop':
       setImmediate(shutdown);
       return { stopping: true };
