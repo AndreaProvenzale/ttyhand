@@ -82,7 +82,8 @@ function acquireLock(): boolean {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const pid = Number(fs.readFileSync(lockPath(), 'utf8'));
       // An empty lock means another daemon is mid-write.
-      if (!pid || isAlive(pid)) return false;
+      // Our own pid was written by a dead daemon in another PID namespace (a Linux sandbox).
+      if (!pid || (pid !== process.pid && isAlive(pid))) return false;
       fs.rmSync(lockPath(), { force: true });
     }
   }

@@ -43,7 +43,7 @@ mkdir -m 700 /tmp/ttyhand
 TTYHAND_HOME=/tmp/ttyhand srt -c 'ttyhand spawn python3'
 ```
 
-The socket is listed by its real path: `/tmp` is a link to `/private/tmp` on macOS. Linux ignores `allowUnixSockets` and `allowPty`; set `"allowAllUnixSockets": true` in `network` there.
+The socket is listed by its real path: `/tmp` is a link to `/private/tmp` on macOS. Linux ignores `allowUnixSockets` and `allowPty`; set `"allowAllUnixSockets": true` in `network` there. A daemon started inside the Linux sandbox gets PTYs without a setting, but ends with the command, so every command starts from scratch; start the daemon outside instead, as below.
 
 Claude Code's sandbox blocks pseudo-terminals and has no setting to allow them, so a daemon started inside it cannot open a terminal. Use MCP, or start the daemon outside the sandbox (`TTYHAND_HOME=/tmp/ttyhand ttyhand list`) and allow its socket with `sandbox.network.allowUnixSockets`. That socket lets sandboxed commands start any program outside the sandbox, so it grants as much as `sandbox.excludedCommands` would.
 
